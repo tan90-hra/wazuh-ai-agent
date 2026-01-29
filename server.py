@@ -55,8 +55,7 @@ class WazuhClient:
         try:
             response = self.session.get(f"{WAZUH_API_URL}/agents?pretty=true&select=id,name,ip,status")
             response.raise_for_status()
-            data = response.json().get('data', {})
-            return data.get('affected_items', [])
+            return response.json()['data']['items']
         except Exception as e:
             return f"Error fetching agents: {e}"
 
