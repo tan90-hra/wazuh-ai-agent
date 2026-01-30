@@ -48,11 +48,11 @@ async def main():
         wazuh_pass="fsLvTt05YQZ.4b32hJYTybmEG9.IKWhO",
         wazuh_port=55000,
         verify_ssl=False,
-        # Indexer config - might be incorrect but we try running agents first
+        # Indexer config - updated to 9201
         wazuh_indexer_host="192.168.88.129",
-        wazuh_indexer_port=9200,
+        wazuh_indexer_port=9201,
         wazuh_indexer_user="admin", 
-        wazuh_indexer_pass="MiDM7x98.DoQHkJ07p.8YdPCBbRfVzFc" # Trying default first
+        wazuh_indexer_pass="Hra010809." 
     )
 
     client = WazuhClient(config)
@@ -61,6 +61,23 @@ async def main():
         print("Initializing client...")
         await client.initialize()
         print("Client initialized.")
+
+        # Test Indexer Connectivity explicitly
+        if client._indexer_client:
+            print("\n--- Testing Wazuh Indexer Connectivity ---")
+            try:
+                # Try a simple health check or version check if available, or just a search
+                # Since get_vulnerability_summary is simple, let's try that or just assume initialize worked if no error
+                # But let's try to fetch something that requires indexer
+                print("Attempting to fetch vulnerability summary (requires Indexer)...")
+                vuln_summary = await client.get_vulnerability_summary(time_range="1d")
+                print("Indexer connection successful!")
+                import json
+                print(json.dumps(vuln_summary, indent=2))
+            except Exception as e:
+                print(f"Indexer connection failed: {e}")
+        else:
+            print("Indexer client not initialized.")
         
         print("\n--- Listing Online Agents ---")
         agents_data = await client.get_agents(status="active", limit=10)
@@ -73,13 +90,31 @@ async def main():
             print("No active agents found or invalid response format.")
             print(agents_data)
 
-        print("\n--- Querying Agent 001 Details ---")
-        agent_001 = await client.get_agents(agent_id="001")
-        if agent_001 and 'items' in agent_001 and len(agent_001['items']) > 0:
+        print("\n--- Querying Agent 001 Details (Attempt 1: Path) ---")
+        try:
+            # Try accessing via path /agents/001
+            agent_001 = await client._request("GET", "/agents/001")
             import json
-            print(json.dumps(agent_001['items'][0], indent=2))
-        else:
-            print("Agent 001 not found.")
+            print(json.dumps(agent_001, indent=2))
+        except Exception as e:
+            print(f"Path attempt failed: {e}")
+
+        print("\n--- Querying Agent 001 Details (Attempt 2: Search Query) ---")
+        try:
+            # Try accessing via q=id=001
+            agent_001 = await client.get_agents(q="id=001")
+            import json
+            print(json.dumps(agent_001, indent=2))
+        except Exception as e:
+            print(f"Query attempt failed: {e}")
+
+        print("\n--- Checking Vulnerabilities for Agent 001 ---")
+        try:
+            vulns = await client.get_vulnerabilities(agent_id="001", limit=5)
+            import json
+            print(json.dumps(vulns, indent=2))
+        except Exception as e:
+            print(f"Vulnerability check failed: {e}")
 
     except Exception as e:
         print(f"Error: {e}")

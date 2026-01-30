@@ -58,7 +58,8 @@ class WazuhIndexerClient:
         self.client = httpx.AsyncClient(
             verify=self.verify_ssl,
             timeout=self.timeout,
-            auth=auth
+            auth=auth,
+            trust_env=False
         )
         self._initialized = True
         logger.info(f"WazuhIndexerClient initialized for {self.host}:{self.port}")
