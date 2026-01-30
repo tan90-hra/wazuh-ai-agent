@@ -66,7 +66,8 @@ class WazuhClient:
         """Initialize the HTTP client and authenticate."""
         self.client = httpx.AsyncClient(
             verify=self.config.verify_ssl,
-            timeout=self.config.request_timeout_seconds
+            timeout=self.config.request_timeout_seconds,
+            trust_env=False
         )
         await self._authenticate()
 
@@ -94,7 +95,7 @@ class WazuhClient:
                 raise ValueError("Invalid authentication response from Wazuh API")
             
             self.token = data["data"]["token"]
-            print(f"✅ Authenticated with Wazuh server at {self.config.wazuh_host}")
+            logger.info(f"Authenticated with Wazuh server at {self.config.wazuh_host}")
             
         except httpx.ConnectError:
             raise ConnectionError(f"Cannot connect to Wazuh server at {self.config.wazuh_host}:{self.config.wazuh_port}")
