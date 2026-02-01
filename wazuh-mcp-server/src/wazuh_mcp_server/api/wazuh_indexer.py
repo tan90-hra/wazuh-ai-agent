@@ -267,6 +267,36 @@ class WazuhIndexerClient:
         except httpx.ConnectError:
             raise ConnectionError(f"Cannot connect to Wazuh Indexer at {self.host}:{self.port}")
 
+    async def get_alerts(self, level: str = None, limit: int = 10) -> Dict[str, Any]:
+        """
+        Query alerts from Wazuh Indexer (wazuh-alerts-*).
+        """
+        await self._ensure_initialized()
+        
+        # Build query
+        query = {"bool": {"must": []}}
+        
+        # Filter by level
+        if level:
+            try:
+                # Handle "10+" format
+                level_num = int(str(level).replace("+", ""))
+                query["bool"]["must"].append({"range": {"rule.level": {"gte": level_num}}})
+            except ValueError:
+                pass
+
+        # Sort by timestamp desc
+        sort = [{"timestamp": {"order": "desc"}}]
+
+        # Search wazuh-alerts-*
+        result = await self._search("wazuh-alerts-*", query, size=limit)
+        
+        # Process hits
+        hits = result.get("hits", {}).get("hits", [])
+        alerts = [hit["_source"] for hit in hits]
+        
+        return {"data": {"alerts": alerts, "total": len(alerts)}}
+
     async def health_check(self) -> Dict[str, Any]:
         """
         Check Wazuh Indexer health status.
@@ -293,8 +323,6 @@ class WazuhIndexerClient:
                 "status": "unavailable",
                 "error": str(e)
             }
-
-
 class IndexerNotConfiguredError(Exception):
     """Raised when Wazuh Indexer is not configured but required."""
 

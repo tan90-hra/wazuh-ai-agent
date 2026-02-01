@@ -110,8 +110,14 @@ class WazuhClient:
                 raise ValueError(f"Wazuh API error: {e.response.status_code} - {e.response.text}")
     
     async def get_alerts(self, **params) -> Dict[str, Any]:
-        """Get alerts from Wazuh."""
-        return await self._request("GET", "/alerts", params=params)
+        """Get alerts from Wazuh Indexer."""
+        if not self._indexer_client:
+            raise IndexerNotConfiguredError("Wazuh Indexer is required for querying alerts.")
+            
+        level = params.get("level")
+        limit = params.get("limit", 10)
+        
+        return await self._indexer_client.get_alerts(level=level, limit=limit)
     
     async def get_agents(self, **params) -> Dict[str, Any]:
         """Get agents from Wazuh."""
