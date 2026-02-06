@@ -160,10 +160,13 @@ async def execute_tool(tool_name: str, args: Dict[str, Any]) -> str:
     """Execute Wazuh tool and return result as string."""
     try:
         if tool_name == "get_agents":
-            status = args.get("status", "active")
+            # Wazuh API requires status in ['active','pending','never_connected','disconnected'] or omit; never send empty string
+            status = args.get("status") or "active"
             limit = args.get("limit", 10)
             if status == "all":
-                status = None
+                status = None  # omit status to get all
+            elif status not in ("active", "pending", "never_connected", "disconnected"):
+                status = "active"
             result = await wazuh_client.get_agents(status=status, limit=limit)
             return json.dumps(result, indent=2, ensure_ascii=False)
             
@@ -212,61 +215,9 @@ async def chat_endpoint(
             {"role": "user", "content": request.message}
         ]
 
-    try:
-        # First LLM call to get tool calls
-        response = await client.post(
-            "https://api.deepseek.com/chat/completions",
-            headers={
-                "Authorization": f"Bearer {x_api_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": request.model,
-                "messages": messages,
-                "tools": TOOLS,
-                "stream": False  # Use non-streaming for tool decision
-            }
-        )
-        
-        if response.status_code != 200:
-            error_content = response.text
-            logger.error(f"DeepSeek API Error: {response.status_code} - {error_content}")
-            yield f"data: {json.dumps({'choices': [{'delta': {'content': f'Error: DeepSeek API returned {response.status_code} - {error_content}'}}]})}\n\n"
-            return
-
-        response_data = response.json()
-        message = response_data["choices"][0]["message"]
-        
-        # Check for tool calls
-        if "tool_calls" in message:
-            tool_calls = message["tool_calls"]
-            messages.append(message)  # Add assistant's response with tool calls
-            
-            # Execute tools
-            for tool_call in tool_calls:
-                function_name = tool_call["function"]["name"]
-                arguments = json.loads(tool_call["function"]["arguments"])
-                
-                # Fix f-string backslash issue by defining message first
-                msg = f"\n*正在执行工具: {function_name}...*\n\n"
-                yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
-                
-                tool_result = await execute_tool(function_name, arguments)
-                
-                # Filter out potential DSML garbage if tool execution failed messily
-                # (Simple heuristic: if result starts with Error and is very long)
-                if tool_result.startswith("Error") and len(tool_result) > 500:
-                     tool_result = "Tool execution failed. Please check logs."
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call["id"],
-                    "content": tool_result
-                })
-
-            # Second LLM call with tool results (Streaming)
-            async with client.stream(
-                "POST",
+        try:
+            # First LLM call to get tool calls
+            response = await client.post(
                 "https://api.deepseek.com/chat/completions",
                 headers={
                     "Authorization": f"Bearer {x_api_key}",
@@ -275,24 +226,75 @@ async def chat_endpoint(
                 json={
                     "model": request.model,
                     "messages": messages,
-                    "stream": True
+                    "tools": TOOLS,
+                    "stream": False  # Use non-streaming for tool decision
                 }
-            ) as stream_response:
-                async for chunk in stream_response.aiter_bytes():
-                    # Filter out DSML tokens if they appear in the stream
-                    # (This is a basic filter, might need regex for robust handling)
-                    try:
-                        chunk_str = chunk.decode("utf-8")
-                        if "< | DSML |" in chunk_str:
-                             continue # Skip chunks with internal tokens
-                        yield chunk
-                    except:
-                        yield chunk
+            )
+            
+            if response.status_code != 200:
+                error_content = response.text
+                logger.error(f"DeepSeek API Error: {response.status_code} - {error_content}")
+                yield f"data: {json.dumps({'choices': [{'delta': {'content': f'Error: DeepSeek API returned {response.status_code} - {error_content}'}}]})}\n\n"
+                return
 
-        else:
-            # No tool calls, just stream the content directly
-            yield f"data: {json.dumps({'choices': [{'delta': {'content': message['content']}}]})}\n\n"
-            yield "data: [DONE]\n\n"
+            response_data = response.json()
+            message = response_data["choices"][0]["message"]
+            
+            # Check for tool calls
+            if "tool_calls" in message:
+                tool_calls = message["tool_calls"]
+                messages.append(message)  # Add assistant's response with tool calls
+                
+                # Execute tools
+                for tool_call in tool_calls:
+                    function_name = tool_call["function"]["name"]
+                    arguments = json.loads(tool_call["function"]["arguments"])
+                    
+                    # Fix f-string backslash issue by defining message first
+                    msg = f"\n*正在执行工具: {function_name}...*\n\n"
+                    yield f"data: {json.dumps({'choices': [{'delta': {'content': msg}}]})}\n\n"
+                    
+                    tool_result = await execute_tool(function_name, arguments)
+                    
+                    # Filter out potential DSML garbage if tool execution failed messily
+                    # (Simple heuristic: if result starts with Error and is very long)
+                    if tool_result.startswith("Error") and len(tool_result) > 500:
+                        tool_result = "Tool execution failed. Please check logs."
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "content": tool_result
+                    })
+
+                # Second LLM call with tool results (Streaming)
+                async with client.stream(
+                    "POST",
+                    "https://api.deepseek.com/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {x_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": request.model,
+                        "messages": messages,
+                        "stream": True
+                    }
+                ) as stream_response:
+                    async for chunk in stream_response.aiter_bytes():
+                        # Filter out DSML tokens if they appear in the stream
+                        try:
+                            chunk_str = chunk.decode("utf-8")
+                            if "< | DSML |" in chunk_str:
+                                continue
+                            yield chunk
+                        except Exception:
+                            yield chunk
+
+            else:
+                # No tool calls, just stream the content directly
+                yield f"data: {json.dumps({'choices': [{'delta': {'content': message['content']}}]})}\n\n"
+                yield "data: [DONE]\n\n"
 
         except Exception as e:
             logger.error(f"Chat error: {e}")

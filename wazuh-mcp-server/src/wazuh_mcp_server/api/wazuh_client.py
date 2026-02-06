@@ -120,7 +120,11 @@ class WazuhClient:
         return await self._indexer_client.get_alerts(level=level, limit=limit)
     
     async def get_agents(self, **params) -> Dict[str, Any]:
-        """Get agents from Wazuh."""
+        """Get agents from Wazuh. status must be one of: active, pending, never_connected, disconnected (or omit for all)."""
+        allowed_status = ("active", "pending", "never_connected", "disconnected")
+        params = dict(params)
+        if "status" in params and (params["status"] is None or params["status"] == "" or params["status"] not in allowed_status):
+            params.pop("status", None)
         return await self._request("GET", "/agents", params=params)
     
     async def get_vulnerabilities(self, **params) -> Dict[str, Any]:
